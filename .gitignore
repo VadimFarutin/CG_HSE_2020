@@ -4,6 +4,9 @@
 [Bb]uild/
 [Bb]uilds/
 Assets/AssetStoreTools*
+Logs/
+Packages/
+ProjectSettings/
 
 # Visual Studio cache directory
 .vs/
