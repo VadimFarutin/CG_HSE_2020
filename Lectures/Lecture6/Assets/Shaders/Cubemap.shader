@@ -21,6 +21,7 @@
             #include "UnityLightingCommon.cginc"
             
             #define EPS 1e-7
+            #define MONTECARLO_N 10000
 
             struct appdata
             {
@@ -65,6 +66,11 @@
             {
                 return float(Hash(seed)) / 4294967295.0; // 2^32-1
             }
+
+            float Random(uint seed, float a, float b)
+            {
+                return Random(seed) * (b - a) + a;
+            }
             
             float3 SampleColor(float3 direction)
             {   
@@ -75,6 +81,11 @@
             float Sqr(float x)
             {
                 return x * x;
+            }
+
+            float CosToSin(float x)
+            {
+                return sqrt(1 - Sqr(x));
             }
             
             // Calculated according to NDF of Cook-Torrance
@@ -89,17 +100,67 @@
                 return a2 / (UNITY_PI * Sqr(NDotH2 * (a2 - 1) + 1));
             }
 
+            // Calculates matrix which transforms 
+            // (0.0, 0.0, 1.0) into given normal vector
+            float3x3 GetRotationMatrix(float3 normal)
+            {
+                float3 ez = float3(0.0, 0.0, 1.0);
+                float3 crossV = normalize(cross(normal, ez));
+                float cosRotate = dot(normal, ez) / length(normal);
+                float sinRotate = CosToSin(cosRotate);
+
+                // rotates around crossV at arccos(cosRotate) angle
+                float3x3 rotateMatrix = float3x3(
+                    cosRotate + (1 - cosRotate) * Sqr(crossV.x), 
+                    (1 - cosRotate) * crossV.x * crossV.y - sinRotate * crossV.z, 
+                    (1 - cosRotate) * crossV.x * crossV.z + sinRotate * crossV.y,
+
+                    (1 - cosRotate) * crossV.y * crossV.x + sinRotate * crossV.z,
+                    cosRotate + (1 - cosRotate) * Sqr(crossV.y),
+                    (1 - cosRotate) * crossV.y * crossV.z - sinRotate * crossV.x,
+
+                    (1 - cosRotate) * crossV.z * crossV.x - sinRotate * crossV.y,
+                    (1 - cosRotate) * crossV.z * crossV.y + sinRotate * crossV.x,
+                    cosRotate + (1 - cosRotate) * Sqr(crossV.z)
+                );
+                
+                return transpose(rotateMatrix);
+            }
+
+            float3 GetRandomVector(uint i)
+            {
+                float cosBeta = Random(i, 0.0, 1.0);
+                float aplha = Random(i + MONTECARLO_N, 0.0, 2 * UNITY_PI);
+                float sinBeta = CosToSin(cosBeta);
+                float3 w = float3(sinBeta * cos(aplha), sinBeta * sin(aplha), cosBeta);
+                
+                return w;
+            }
+            
             fixed4 frag (v2f i) : SV_Target
             {
                 float3 normal = normalize(i.normal);
                 
                 float3 viewDirection = normalize(_WorldSpaceCameraPos - i.pos.xyz);
                 
-                // Replace this specular calculation by Montecarlo.
-                // Normalize the BRDF in such a way, that integral over a hemysphere of (BRDF * dot(normal, w')) == 1
-                // TIP: use Random(i) to get a pseudo-random value.
-                float3 viewRefl = reflect(-viewDirection.xyz, normal);
-                float3 specular = SampleColor(viewRefl);
+                float3x3 rotateMatrix = GetRotationMatrix(normal);
+                float3 L0 = float3(0.0, 0.0, 0.0);
+                float sum = 0.0;
+
+                for (uint i = 0; i < MONTECARLO_N; i++)
+                {
+                    float3 w0 = GetRandomVector(i);
+                    // transforming w from upper half-space 
+                    // into half-space defined by normal
+                    float3 w = mul(rotateMatrix, w0);
+                    float cosTheta = dot(normal, w);
+                    float fValue = GetSpecularBRDF(viewDirection, w, normal);
+
+                    L0 += SampleColor(w) * fValue * cosTheta;
+                    sum += fValue * cosTheta;
+                }
+
+                float3 specular = L0 / sum;
                 
                 return fixed4(specular, 1);
             }
